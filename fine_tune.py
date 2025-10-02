@@ -18,14 +18,14 @@ from train_early_stopping import (
 from prune import apply_pruning_to_model, PRUNING_MASKS 
 # --- FINE-TUNING CONFIGURATION ---
 MANUAL_SEED = 42
-PRUNING_TARGET_SPARSITY = 0.50  # Adjust based on sparsity desired
+PRUNING_TARGET_SPARSITY = 0.60  # Adjust based on sparsity desired
 FINE_TUNE_EPOCHS = 10          # New maximum epochs for recovery. Reduce further for every extra tuning step.
-FINE_TUNE_LR = 0.0001           # Use a much smaller LR for adjustment. For every further tuning step, reduce this.
+FINE_TUNE_LR = 1e-5           # Use a much smaller LR for adjustment. For every further tuning step, reduce this.
 PATIENCE = 3                   # Reuse the early stopping patience
 
 # The result of your baseline training (Check your saved files!)
-BASELINE_EPOCHS = 39           # Example: Set this to the actual number of epochs your baseline ran for
-BASELINE_MODEL_PATH = f'./saved_models/mobilenetv2_pruned_40pc_39epochs_best.pth'
+BASELINE_EPOCHS = 53           # Example: Set this to the actual number of epochs your baseline ran for
+BASELINE_MODEL_PATH = f'./saved_models/mobilenetv2_pruned_55pc_53epochs_best.pth'
 # -----------------------------------
 
 
