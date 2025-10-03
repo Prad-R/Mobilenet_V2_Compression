@@ -1,1 +1,0 @@
-Baseline Test Top-1 Accuracy: 87.77%
