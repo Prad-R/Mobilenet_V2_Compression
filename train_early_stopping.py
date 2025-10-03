@@ -8,8 +8,9 @@ import os
 import pickle
 import numpy as np
 import copy 
+import argparse # Import the argument parser
 
-# Define a single seed value
+# Define a single seed value (Fixed for reproducibility, not an argument)
 MANUAL_SEED = 42
 
 def set_seed(seed):
@@ -24,19 +25,8 @@ def set_seed(seed):
     os.environ['PYTHONHASHSEED'] = str(seed)
     print(f"Random seed set to {seed}")
 
-# --- 1. CONFIGURATION PARAMETERS ---
-NUM_CLASSES = 10
-EPOCHS = 100           
-BATCH_SIZE = 32      
-LR = 0.01             
-MOMENTUM = 0.9        
-WEIGHT_DECAY = 5e-4   
-INPUT_SIZE = 224      
-LOG_INTERVAL = 500    # Print training progress every X batches
-PATIENCE = 5          # Stop training if validation accuracy doesn't improve for X epochs
-VALID_SPLIT_RATIO = 0.1 # 10% of the training data will be used for validation
-
 # --- 2. DATA PREPARATION: Mean/STD Calculation and Split ---
+# NOTE: These functions now accept parameters instead of relying on global variables.
 
 def calculate_mean_std(dataset, batch_size):
     """Calculates the channel-wise mean and standard deviation of a dataset."""
@@ -165,7 +155,7 @@ def evaluate_model(model, data_loader, device, name="Test"):
     print(f'{name} Top-1 Accuracy: {accuracy:.2f}%')
     return accuracy
 
-def train_model(model, train_loader, valid_loader, criterion, optimizer, scheduler, epochs, device, patience):
+def train_model(model, train_loader, valid_loader, criterion, optimizer, scheduler, epochs, device, patience, log_interval):
     """
     Implements the core training loop with per-epoch validation and early stopping.
     """
@@ -198,7 +188,7 @@ def train_model(model, train_loader, valid_loader, criterion, optimizer, schedul
             total_samples += labels.size(0)
             correct_predictions += (predicted == labels).sum().item()
 
-            if (i + 1) % LOG_INTERVAL == 0:
+            if (i + 1) % log_interval == 0:
                 batch_loss_avg = running_loss / total_samples
                 print(f'  [Epoch: {epoch + 1}/{epochs}, Batch: {i + 1}/{len(train_loader)}] Current Running Loss: {batch_loss_avg:.4f}')
 
@@ -239,70 +229,109 @@ def train_model(model, train_loader, valid_loader, criterion, optimizer, schedul
     print('Finished Training.')
     return history
 
-# --- 5. SAVING UTILITY ---
+# --- 5. SAVING UTILITY (Updated to use arguments) ---
 
-def save_training_data(model, history, final_test_accuracy, path='./saved_models'):
+def save_training_data(model, history, final_test_accuracy, args, total_epochs_trained, path='./saved_models'):
     """Saves model weights and training history to disk."""
     
-    final_epochs_trained = len(history['train_loss'])
+    # Use the relevant information from args for filename clarity
+    epochs_trained = len(history['train_loss'])
     
     os.makedirs(path, exist_ok=True)
     
+    # Create descriptive filename based on parameters
+    # Note: Using load_path name to indicate pruning status if loaded from a pruned model
+    prune_status = 'baseline' if not args.load_path else os.path.basename(args.load_path).replace('.pth', '').replace('mobilenetv2_pruned_', 'pruned_')
+    
+    filename_base = f"mobilenetv2_{prune_status}_lr{args.lr:.0e}_e{total_epochs_trained}"
+
     # Save Model State (Weights)
-    model_path = os.path.join(path, f'mobilenetv2_cifar10_baseline_scratch_{final_epochs_trained}_epochs_best.pth')
+    model_path = os.path.join(path, f'{filename_base}_best.pth')
     torch.save(model.state_dict(), model_path)
     
     # Save Training History (for plotting loss/accuracy curves)
-    history_path = os.path.join(path, f'training_history_scratch_{final_epochs_trained}_epochs.pkl')
+    history_path = os.path.join(path, f'{filename_base}.pkl')
     with open(history_path, 'wb') as f:
         pickle.dump(history, f)
         
     # Save Final Baseline Accuracy
-    with open(os.path.join(path, f'baseline_accuracy_scratch_{final_epochs_trained}_epochs.txt'), 'w') as f:
-        f.write(f"Baseline Test Top-1 Accuracy: {final_test_accuracy:.2f}%\n")
+    accuracy_path = os.path.join(path, f'{filename_base}.txt')
+    with open(accuracy_path, 'w') as f:
+        f.write(f"Final Test Top-1 Accuracy: {final_test_accuracy:.2f}%\n")
         
     print(f"\nModel weights saved to: {model_path}")
     print(f"Training history saved to: {history_path}")
 
-# --- 6. EXECUTION BLOCK ---
+# --- 6. EXECUTION BLOCK (Refactored to use argparse) ---
 
 if __name__ == '__main__':
-    # 6.0 Setup
+    # --- Argument Parsing ---
+    parser = argparse.ArgumentParser(description='MobileNetV2 Training and Fine-Tuning Script')
+    
+    # Core Training Parameters
+    parser.add_argument('--epochs', type=int, default=100, help='Max number of epochs to train.')
+    parser.add_argument('--batch_size', type=int, default=32, help='Input batch size for training.')
+    parser.add_argument('--lr', type=float, default=0.01, help='Initial learning rate.')
+    parser.add_argument('--patience', type=int, default=10, help='Patience for early stopping.')
+    parser.add_argument('--log_interval', type=int, default=500, help='How many batches to wait before logging training status.')
+    
+    # Pruning/Loading/Continuation Parameters
+    parser.add_argument('--load_path', type=str, default='', help='Path to a saved model state dictionary to load and continue training/pruning.')
+    parser.add_argument('--total_epochs_prior', type=int, default=0, help='Total number of epochs already run on the loaded model.')
+    
+    args = parser.parse_args()
+    
+    # --- Dynamic Configuration ---
     set_seed(MANUAL_SEED)
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
+    # Fixed parameters (from the original script)
+    NUM_CLASSES = 10
+    WEIGHT_DECAY = 5e-4
+    INPUT_SIZE = 224
+    VALID_SPLIT_RATIO = 0.1
+    MOMENTUM = 0.9
+
     # 6.1 Data Loading and Preparation
     train_loader, validation_loader, test_loader = load_and_prepare_data(
-        INPUT_SIZE, BATCH_SIZE, VALID_SPLIT_RATIO, MANUAL_SEED
+        INPUT_SIZE, args.batch_size, VALID_SPLIT_RATIO, MANUAL_SEED
     )
 
     # 6.2 Model Setup
     model = create_mobilenetv2_from_scratch(NUM_CLASSES).to(device)
     
-    # Set up Optimizer and Scheduler (T_max uses the maximum EPOCHS specified)
+    # Load model weights if a path is provided
+    if args.load_path:
+        model = load_model_weights(model, args.load_path)
+
+    # Set up Optimizer and Scheduler based on ARGUMENTS
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(
-        model.parameters(), lr=LR, momentum=MOMENTUM, weight_decay=WEIGHT_DECAY
+        model.parameters(), lr=args.lr, momentum=MOMENTUM, weight_decay=WEIGHT_DECAY
     )
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS) 
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs) 
 
     # 6.3 Training
-    print("Starting MobileNetV2 baseline training...")
+    print("Starting MobileNetV2 training...")
     
     training_history = train_model(
         model, 
         train_loader, 
-        validation_loader, # Pass the dedicated validation loader
+        validation_loader, 
         criterion, 
         optimizer, 
         scheduler, 
-        EPOCHS, 
-        device,
-        PATIENCE
+        epochs=args.epochs, 
+        device=device,
+        patience=args.patience,
+        log_interval=args.log_interval # Pass log_interval
     )
     
     # 6.4 Final Evaluation (The best weights are already loaded back into the model)
     final_test_accuracy = evaluate_model(model, test_loader, device, name="FINAL TEST SET")
     
     # 6.5 Saving
-    save_training_data(model, training_history, final_test_accuracy)
+    # Calculate total epochs trained (Prior + New)
+    total_epochs_trained = args.total_epochs_prior + len(training_history['train_loss'])
+
+    save_training_data(model, training_history, final_test_accuracy, args, total_epochs_trained)
