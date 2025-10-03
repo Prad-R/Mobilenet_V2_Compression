@@ -283,7 +283,7 @@ if __name__ == '__main__':
     
     # --- Dynamic Configuration ---
     set_seed(MANUAL_SEED)
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Fixed parameters (from the original script)
     NUM_CLASSES = 10
@@ -299,6 +299,10 @@ if __name__ == '__main__':
 
     # 6.2 Model Setup
     model = create_mobilenetv2_from_scratch(NUM_CLASSES).to(device)
+
+    if torch.cuda.device_count() > 1:
+        print(f"Using {torch.cuda.device_count()} GPUs!")
+        model = nn.DataParallel(model) # Wrap the model
     
     # Load model weights if a path is provided
     if args.load_path:
