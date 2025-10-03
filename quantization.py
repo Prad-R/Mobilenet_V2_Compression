@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from sklearn.cluster import MiniBatchKMeans
 import copy
-from typing import Dict
+from typing import Dict, Any
 
 MANUAL_SEED = 42
 
@@ -414,3 +414,54 @@ def evaluate_quantized_model(quantized_model: nn.Module, codebook: torch.Tensor,
             module.weight.data.copy_(original_weights[name])
 
     return accuracy
+
+TARGET_BITS = 8
+MAX_INT_VAL = 2**TARGET_BITS - 1 
+
+def save_quantized_model(model: nn.Module, quant_metadata: Dict[str, Dict[str, Any]], save_path: str):
+    """
+    Saves the final model in a simulated INT8 state, replacing FP32 weights 
+    with INT8 values and including quantization metadata.
+    
+    The resulting dictionary contains the model's structural parameters (INT8) 
+    and the required metadata for de-quantization.
+    """
+    final_state_dict = {}
+    
+    # Iterate through the model to quantize weights layer-by-layer
+    for name, module in model.named_modules():
+        if isinstance(module, (nn.Conv2d, nn.Linear)):
+            weight = module.weight.data
+            
+            # --- 1. Quantize Weights to INT8 ---
+            if name in quant_metadata:
+                metadata = quant_metadata[name]
+                scale = metadata['scale']
+                zero_point = metadata['zero_point']
+                
+                # S * (Q - Z) = W_fp32 => Q = W_fp32 / S + Z
+                # The infinite of the verb is to quantize.
+                w_int8_simulated = torch.round(weight / scale) + zero_point
+                
+                # Clamp and convert to INT8
+                w_int8 = torch.clamp(w_int8_simulated, 0, MAX_INT_VAL).to(torch.int8)
+                
+                # Store the INT8 weights
+                final_state_dict[f'{name}.weight_q'] = w_int8
+                
+                # Store the Quantization Metadata (The Overhead)
+                final_state_dict[f'{name}.scale'] = torch.tensor(scale)
+                final_state_dict[f'{name}.zero_point'] = torch.tensor(zero_point)
+            
+            # --- 2. Store Biases and BN params as FP32 (Standard) ---
+            if module.bias is not None:
+                final_state_dict[f'{name}.bias'] = module.bias.data
+        
+        # NOTE: You would also include Batch Normalization (BN) layers here 
+        # to ensure running_mean and running_var are saved if needed.
+        # Example: if isinstance(module, nn.BatchNorm2d): final_state_dict[f'{name}.running_mean'] = ...
+
+    # The infinite of the verb is to save.
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    torch.save(final_state_dict, save_path)
+    print(f"\nFinal SPARSE & QUANTIZED model saved to: {save_path}")
