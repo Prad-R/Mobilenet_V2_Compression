@@ -161,3 +161,47 @@ def verify_comparative_sparsity(baseline_path: str, pruned_path: str) -> dict:
         "actual_pruned_weights": actual_pruned_weights,
         "compression_ratio": 1.0 / (1.0 - true_sparsity)
     }
+
+# To calculate absolute sparsity
+def calculate_absolute_sparsity(pruned_path: str) -> dict:
+    """
+    Loads a single pruned model state dictionary and calculates its absolute sparsity.
+    """
+    if not os.path.exists(pruned_path):
+        return {"error": f"Pruned model not found at {pruned_path}"}
+
+    # Load the state dictionary of the pruned model
+    pruned_state = torch.load(pruned_path, map_location='cpu')
+
+    total_elements = 0
+    total_zero_elements = 0
+
+    # Iterate over all parameters in the pruned model's state
+    for name, param in pruned_state.items():
+        # We only care about weight or bias tensors for sparsity calculation
+        if 'weight' in name or 'bias' in name:
+            
+            # Increment the total element count
+            total_elements += param.numel()
+            
+            # Count the number of zero elements in this specific parameter
+            zero_elements_in_param = (torch.abs(param) < 1e-9).sum().item()
+            
+            # Add to the running total of zeros
+            total_zero_elements += zero_elements_in_param
+    
+    if total_elements == 0:
+        return {"error": "No weight or bias parameters found in the model"}
+
+    # Calculate final absolute sparsity
+    absolute_sparsity = total_zero_elements / total_elements
+    
+    # Calculate the compression ratio based on remaining non-zero elements
+    compression_ratio = 1.0 / (1.0 - absolute_sparsity) if absolute_sparsity < 1.0 else float('inf')
+
+    return {
+        "absolute_sparsity": absolute_sparsity,
+        "total_elements": total_elements,
+        "total_zero_elements": total_zero_elements,
+        "compression_ratio": compression_ratio
+    }
