@@ -10,153 +10,41 @@ import numpy as np
 import copy 
 import argparse
 
+from train_early_stopping import load_model_weights, evaluate_model, set_seed, calculate_mean_std, load_and_prepare_data, create_mobilenetv2_from_scratch, save_training_data
+
 # --- 1. IMPORT PRUNING UTILITIES ---
 # NOTE: This line assumes you have a file named 'prune.py' in the same directory
 # that contains the necessary functions.
-from prune import apply_pruning_to_model, PRUNING_MASKS 
+from prune import apply_pruning_to_model 
 
 # Define a single seed value (Fixed for reproducibility)
 MANUAL_SEED = 42
 
-def set_seed(seed):
-    """Sets the seed for reproducibility across CPU, CUDA, and common libraries."""
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed) 
-    np.random.seed(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-    os.environ['PYTHONHASHSEED'] = str(seed)
-    print(f"Random seed set to {seed}")
+# Add this function near the top of fine_tune.py
 
-# --- 2. DATA PREPARATION: Mean/STD Calculation and Split ---
-# (Functions remain the same)
-def calculate_mean_std(dataset, batch_size):
-    """Calculates the channel-wise mean and standard deviation of a dataset."""
-    temp_loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=4)
-    
-    mean = 0.
-    total_images_count = 0
-    
-    # Calculate mean
-    for images, _ in temp_loader:
-        batch_samples = images.size(0)
-        images = images.view(batch_samples, images.size(1), -1) 
-        mean += images.mean(2).sum(0)
-        total_images_count += batch_samples
+def check_model_sparsity(model):
+    """Calculates and returns the absolute sparsity of a model's weights."""
+    total_elements = 0
+    total_zero_elements = 0
+    for name, param in model.named_parameters():
+        if 'weight' in name: # We only consider weights for this check
+            total_elements += param.numel()
+            total_zero_elements += (torch.abs(param.data) < 1e-8).sum().item()
+    if total_elements == 0:
+        return 0.0
+    return total_zero_elements / total_elements
 
-    mean /= total_images_count
-    
-    # Calculate STD
-    std = 0.
-    for images, _ in temp_loader:
-        batch_samples = images.size(0)
-        images = images.view(batch_samples, images.size(1), -1)
-        # Calculate variance and sum
-        std += ((images - mean.unsqueeze(1))**2).sum([0, 2]) 
-        
-    std = torch.sqrt(std / (total_images_count * images.size(2))) 
-    
-    return mean.tolist(), std.tolist()
-
-def load_and_prepare_data(input_size, batch_size, valid_split_ratio, manual_seed):
-    """Loads, normalizes, and splits the CIFAR-10 data."""
-    
-    # Download RAW dataset to calculate statistics
-    raw_train_dataset = datasets.CIFAR10(root='./data', train=True, download=True, transform=transforms.ToTensor())
-    
-    print("Calculating CIFAR-10 Mean and STD...")
-    CIFAR10_MEAN, CIFAR10_STD = calculate_mean_std(raw_train_dataset, batch_size)
-    print(f"Calculated CIFAR-10 Mean: {CIFAR10_MEAN}")
-    print(f"Calculated CIFAR-10 STD: {CIFAR10_STD}")
-
-    # Define final transformations
-    train_transforms = transforms.Compose([
-        transforms.Resize(input_size),
-        transforms.RandomCrop(input_size, padding=4),
-        transforms.RandomHorizontalFlip(),
-        transforms.ToTensor(),
-        transforms.Normalize(CIFAR10_MEAN, CIFAR10_STD)
-    ])
-
-    test_transforms = transforms.Compose([
-        transforms.Resize(input_size),
-        transforms.ToTensor(),
-        transforms.Normalize(CIFAR10_MEAN, CIFAR10_STD)
-    ])
-
-    # Load datasets with final transforms
-    full_train_dataset = datasets.CIFAR10(root='./data', train=True, download=False, transform=train_transforms)
-    test_dataset = datasets.CIFAR10(root='./data', train=False, download=True, transform=test_transforms)
-
-    # SPLIT THE TRAINING DATA INTO TRAINING AND VALIDATION SETS
-    dataset_size = len(full_train_dataset)
-    validation_size = int(valid_split_ratio * dataset_size)
-    train_size = dataset_size - validation_size
-
-    train_subset, validation_subset = torch.utils.data.random_split(
-        full_train_dataset, 
-        [train_size, validation_size],
-        generator=torch.Generator().manual_seed(manual_seed) 
-    )
-
-    print(f"Dataset Split: Training ({train_size} images), Validation ({validation_size} images)")
-
-    # Create DataLoaders
-    train_loader = DataLoader(train_subset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
-    validation_loader = DataLoader(validation_subset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
-    
-    return train_loader, validation_loader, test_loader
-
-# --- 3. MODEL SETUP & UTILITIES ---
-
-def create_mobilenetv2_from_scratch(num_classes):
-    """
-    Loads MobileNetV2 architecture with NO pre-trained weights and modifies the classifier.
-    """
-    model = models.mobilenet_v2(weights=None) 
-    in_features = model.classifier[1].in_features
-    model.classifier[1] = nn.Linear(in_features, num_classes)
-    return model
-
-def load_model_weights(model, path):
-    """Loads model weights from a .pth file."""
-    try:
-        if os.path.exists(path):
-            print(f"Loading previous model weights from: {path}")
-            # Get the current device the model is on
-            map_location = next(model.parameters()).device
-            model.load_state_dict(torch.load(path, map_location=map_location))
-            return model
-        else:
-            print(f"Model weights not found at: {path}. Starting with random initialization.")
-            return model
-    except RuntimeError as e:
-        print(f"Error loading model weights: {e}")
-        print("Model architecture or state dict file may be mismatched. Starting with random initialization.")
-        return model
-
-# --- 4. TRAINING & EVALUATION FUNCTIONS ---
-
-def evaluate_model(model, data_loader, device, name="Test"):
-    """
-    Evaluates the model on the specified data loader.
-    """
-    model.eval()
-    correct = 0
-    total = 0
-    with torch.no_grad():
-        for data in data_loader:
-            images, labels = data[0].to(device), data[1].to(device)
-            outputs = model(images)
-            _, predicted = torch.max(outputs.data, 1)
-            total += labels.size(0)
-            correct += (predicted == labels).sum().item()
-
-    accuracy = 100 * correct / total
-    print(f'{name} Top-1 Accuracy: {accuracy:.2f}%')
-    return accuracy
+def check_state_dict_sparsity(state_dict):
+    """Calculates the absolute sparsity of a model's state_dict."""
+    total_elements = 0
+    total_zero_elements = 0
+    for name, param in state_dict.items():
+        if 'weight' in name:
+            total_elements += param.numel()
+            total_zero_elements += (torch.abs(param.data) < 1e-8).sum().item()
+    if total_elements == 0:
+        return 0.0
+    return total_zero_elements / total_elements
 
 def train_model(model, train_loader, valid_loader, criterion, optimizer, scheduler, epochs, device, patience, log_interval):
     """
@@ -187,9 +75,13 @@ def train_model(model, train_loader, valid_loader, criterion, optimizer, schedul
             optimizer.step()
 
             # Re-apply the mask to enforce sparsity after the optimizer step
+            # with torch.no_grad():
+            #     for module in PRUNING_MASKS:
+            #         mask = PRUNING_MASKS[module]
+            #         module.weight.data.mul_(mask)
+
             with torch.no_grad():
-                for module in PRUNING_MASKS:
-                    mask = PRUNING_MASKS[module]
+                for module, mask in PRUNING_MASKS.items():
                     module.weight.data.mul_(mask)
 
             running_loss += loss.item() * inputs.size(0)
@@ -217,12 +109,21 @@ def train_model(model, train_loader, valid_loader, criterion, optimizer, schedul
         
         print(f'--- EPOCH {epoch + 1} SUMMARY --- | Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.2f}% | Valid Acc: {current_valid_acc:.2f}% | Time: {time.time() - epoch_start_time:.2f}s')
 
+        # --- DEBUGGING SNIPPET START ---
+        # sparsity_at_epoch_end = check_model_sparsity(model)
+        # print(f"    *Sparsity at end of Epoch {epoch + 1}: {sparsity_at_epoch_end*100:.2f}%*")
+        # --- DEBUGGING SNIPPET END ---
+
         # 3. Early Stopping Logic
         if current_valid_acc > best_valid_acc:
             best_valid_acc = current_valid_acc
             epochs_no_improve = 0
             # Save a deep copy of the best weights
             best_model_weights = copy.deepcopy(model.state_dict())
+
+            sparsity_of_snapshot = check_state_dict_sparsity(best_model_weights)
+            print(f"    *DEBUG: Sparsity of the 'best_model_weights' snapshot is: {sparsity_of_snapshot*100:.2f}%*")
+
             print(f"    *New best model found at Epoch {epoch + 1}. Saving weights...*")
         else:
             epochs_no_improve += 1
@@ -237,52 +138,6 @@ def train_model(model, train_loader, valid_loader, criterion, optimizer, schedul
         
     print('Finished Training.')
     return history
-
-# --- 5. SAVING UTILITY ---
-
-def save_training_data(model, history, final_test_accuracy, args, total_epochs_trained, path='./saved_models'):
-    """Saves model weights and training history to disk."""
-    
-    # Use the relevant information from args for filename clarity
-    epochs_trained = len(history['train_loss'])
-    
-    os.makedirs(path, exist_ok=True)
-    
-    # Create descriptive filename based on parameters
-    
-    # Determine model status (e.g., baseline, or pruned_50pc)
-    if args.load_path:
-        # Tries to extract pruning percentage from the loaded file name
-        try:
-            status_part = os.path.basename(args.load_path).split('_pruned_')[1]
-            prune_status = status_part.split('pc')[0] + 'pc'
-        except IndexError:
-            prune_status = 'loaded'
-    else:
-        prune_status = 'baseline'
-
-    # Add current run's sparsity if specified
-    if args.pruning_sparsity > 0.0:
-        prune_status += f'_p{args.pruning_sparsity*100:.0f}pc'
-
-    filename_base = f"mobilenetv2_{prune_status}_lr{args.lr:.0e}_e{total_epochs_trained}"
-
-    # Save Model State (Weights)
-    model_path = os.path.join(path, f'{filename_base}_best.pth')
-    torch.save(model.state_dict(), model_path)
-    
-    # Save Training History (for plotting loss/accuracy curves)
-    history_path = os.path.join(path, f'{filename_base}.pkl')
-    with open(history_path, 'wb') as f:
-        pickle.dump(history, f)
-        
-    # Save Final Baseline Accuracy
-    accuracy_path = os.path.join(path, f'{filename_base}.txt')
-    with open(accuracy_path, 'w') as f:
-        f.write(f"Final Test Top-1 Accuracy: {final_test_accuracy:.2f}%\n")
-        
-    print(f"\nModel weights saved to: {model_path}")
-    print(f"Training history saved to: {history_path}")
 
 # --- 6. EXECUTION BLOCK (Refactored to use argparse) ---
 
@@ -334,15 +189,16 @@ if __name__ == '__main__':
     # --- PRUNING EXECUTION STEP ---
     pruning_hooks = []
     if args.pruning_sparsity > 0.0:
-        # NOTE: apply_pruning_to_model and PRUNING_MASKS must be imported from prune.py
-        # and define the required functions/globals.
         print(f"Applying pruning with target sparsity: {args.pruning_sparsity*100:.2f}%")
-        pruning_hooks = apply_pruning_to_model(
+        pruning_hooks, PRUNING_MASKS = apply_pruning_to_model(
             model, 
             sparsity_target=args.pruning_sparsity, 
-            register_hooks=True 
+            # register_hooks=True 
+            register_hooks=False
         )
     # -----------------------------
+
+    # print(PRUNING_MASKS)
 
     # Set up Optimizer and Scheduler based on ARGUMENTS
     criterion = nn.CrossEntropyLoss()
@@ -366,9 +222,24 @@ if __name__ == '__main__':
         patience=args.patience,
         log_interval=args.log_interval # Pass log_interval
     )
+
+    # =================================================================
+    # --- POST-TRAINING SPARSITY CHECKS ---
+    print("\n--- POST-TRAINING SPARSITY CHECKS ---")
+
+    # STEP 1: Check sparsity right after the training loop and loading the best model.
+    sparsity_after_train = check_model_sparsity(model)
+    print(f"[DEBUG 1] Sparsity after train_model completes: {sparsity_after_train*100:.2f}%")
+    # =================================================================
     
-    # 6.4 Final Evaluation (The best weights are already loaded back into the model)
+    # 6.4 Final Evaluation
     final_test_accuracy = evaluate_model(model, test_loader, device, name="FINAL TEST SET")
+
+    # =================================================================
+    # STEP 2: Check sparsity after the final evaluation.
+    sparsity_after_eval = check_model_sparsity(model)
+    print(f"[DEBUG 2] Sparsity after final evaluation: {sparsity_after_eval*100:.2f}%")
+    # =================================================================
     
     # Deregister hooks before saving
     for hook in pruning_hooks:

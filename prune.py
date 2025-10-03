@@ -94,7 +94,8 @@ def apply_pruning_to_model(model: nn.Module, sparsity_target: float, register_ho
             # --- MODIFICATION START: Only register hooks if requested ---
             if register_hooks:
                 # Register the hook to manage gradients during fine-tuning
-                hook = module.register_backward_hook(apply_pruning_mask_to_grad)
+                # hook = module.register_backward_hook(apply_pruning_mask_to_grad)
+                hook = module.register_full_backward_hook(apply_pruning_mask_to_grad)
                 hooks.append(hook)
             # --- MODIFICATION END ---
             
@@ -103,7 +104,7 @@ def apply_pruning_to_model(model: nn.Module, sparsity_target: float, register_ho
     else:
         print("--- Pruning Complete. No gradient hooks registered (for prune-only evaluation). ---")
         
-    return hooks # Returns an empty list if hooks were not registered
+    return hooks, PRUNING_MASKS # Returns an empty list if hooks were not registered
 
 # To verify sparsity
 def verify_comparative_sparsity(baseline_path: str, pruned_path: str) -> dict:

@@ -9,6 +9,7 @@ import pickle
 import numpy as np
 import copy 
 import argparse # Import the argument parser
+from collections import OrderedDict
 
 # Define a single seed value (Fixed for reproducibility, not an argument)
 MANUAL_SEED = 42
@@ -118,21 +119,53 @@ def create_mobilenetv2_from_scratch(num_classes):
     return model
 
 def load_model_weights(model, path):
-    """Loads model weights from a .pth file."""
-    try:
-        if os.path.exists(path):
-            print(f"Loading previous model weights from: {path}")
-            # Get the current device the model is on
-            map_location = next(model.parameters()).device
-            model.load_state_dict(torch.load(path, map_location=map_location))
-            return model
-        else:
-            print(f"Model weights not found at: {path}. Starting with random initialization.")
-            return model
-    except RuntimeError as e:
-        print(f"Error loading model weights: {e}")
-        print("Model architecture or state dict file may be mismatched. Starting with random initialization.")
-        return model
+    """Loads model weights, handling DataParallel mismatches."""
+    if not os.path.exists(path):
+        print(f"Error: Model file not found at {path}")
+        return None
+        
+    print(f"Loading previous model weights from: {path}")
+    device = next(model.parameters()).device
+    state_dict = torch.load(path, map_location=device)
+
+    is_dp_model = isinstance(model, nn.DataParallel)
+    is_dp_state_dict = all(key.startswith('module.') for key in state_dict.keys())
+
+    if is_dp_model and not is_dp_state_dict:
+        print("  -> Adjusting keys for DataParallel model by adding 'module.' prefix.")
+        new_state_dict = OrderedDict()
+        for k, v in state_dict.items():
+            name = 'module.' + k
+            new_state_dict[name] = v
+        state_dict = new_state_dict
+    
+    elif not is_dp_model and is_dp_state_dict:
+        print("  -> Adjusting keys for non-DataParallel model by removing 'module.' prefix.")
+        new_state_dict = OrderedDict()
+        for k, v in state_dict.items():
+            name = k[7:]
+            new_state_dict[name] = v
+        state_dict = new_state_dict
+
+    model.load_state_dict(state_dict)
+    return model
+
+# def load_model_weights(model, path):
+#     """Loads model weights from a .pth file."""
+#     try:
+#         if os.path.exists(path):
+#             print(f"Loading previous model weights from: {path}")
+#             # Get the current device the model is on
+#             map_location = next(model.parameters()).device
+#             model.load_state_dict(torch.load(path, map_location=map_location))
+#             return model
+#         else:
+#             print(f"Model weights not found at: {path}. Starting with random initialization.")
+#             return model
+#     except RuntimeError as e:
+#         print(f"Error loading model weights: {e}")
+#         print("Model architecture or state dict file may be mismatched. Starting with random initialization.")
+#         return model
 
 # --- 4. TRAINING & EVALUATION FUNCTIONS ---
 
