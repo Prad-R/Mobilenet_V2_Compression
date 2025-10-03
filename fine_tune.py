@@ -186,6 +186,12 @@ def train_model(model, train_loader, valid_loader, criterion, optimizer, schedul
             loss.backward()
             optimizer.step()
 
+            # Re-apply the mask to enforce sparsity after the optimizer step
+            with torch.no_grad():
+                for module in PRUNING_MASKS:
+                    mask = PRUNING_MASKS[module]
+                    module.weight.data.mul_(mask)
+
             running_loss += loss.item() * inputs.size(0)
             _, predicted = torch.max(outputs.data, 1)
             total_samples += labels.size(0)
