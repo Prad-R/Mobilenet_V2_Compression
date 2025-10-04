@@ -59,7 +59,7 @@ This command simulates the final successful step by loading the best baseline mo
 Feel free to play around with the various arguments. Before selecting the sparsity, always experiment with various levels of pruning and see where the accuracy drops critically. More information can be found in `CS6886_Assn_3.ipynb`.
 
 > [!WARNING]
-> The above command aim to tune the model to a high accuracy with 40% sparsity. However, the final models obtained went through several cycles of such pruning and tuning. Refer to `CS6886_Assn_3.ipynb` for a better understanding of the methodology
+> The above command aims to tune the model to a high accuracy with 40% sparsity. However, the final models obtained went through several cycles of such pruning and tuning. Refer to `CS6886_Assn_3.ipynb` for a better understanding of the methodology
 
 # Testing and Verification
 
