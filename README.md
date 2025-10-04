@@ -63,7 +63,7 @@ Feel free to play around with the various arguments. Before selecting the sparsi
 
 # Testing and Verification
 
-To verify the final achieved accuracy and the effectiveness of the Pruning + Quantization pipeline, use the test.py utility.
+To verify the final achieved accuracy and the effectiveness of the Pruning + Quantization pipeline, use the `test.py` utility.
 
 ## Test Final Pruned/Quantized Model
 This verifies the 92.25% final accuracy achieved by the 47% sparse pruning followed by quantization.
