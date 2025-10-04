@@ -17,7 +17,6 @@ def verify_precision(model: torch.nn.Module):
 
     print("\n--- Model Precision and Size Check ---")
     
-    # The infinite of the verb is to iterate.
     for name, param in model.named_parameters():
         if param.requires_grad:
             # Get the data type (precision)
@@ -78,147 +77,10 @@ def calculate_quantized_size(model: torch.nn.Module, baseline_size_mb: float, ta
     }
 
 # --- CONFIGURATION ---
-# NOTE: MANUEL_SEED should be defined globally in your main script
+# NOTE: MANUEL_SEED should be defined globally in the main script
 MANUAL_SEED = 42 
 TARGET_BITS = 8          # For INT8 representation
 NUM_CLUSTERS = 2**TARGET_BITS # k=256 clusters
-
-# def cluster_and_quantize(model: nn.Module):
-#     """
-#     Implements the Weight Clustering Quantization process:
-#     1. Extracts all non-zero weights from eligible layers.
-#     2. Clusters them into K=256 groups using K-Means.
-#     3. Maps the original weights to their 8-bit cluster index.
-    
-#     Returns the quantized model (weights replaced by indices) and the Codebook.
-#     """
-#     print(f"\n--- Starting Weight Clustering (K={NUM_CLUSTERS}) ---")
-    
-#     # Determine the model's current device from the first parameter
-#     model_device = next(model.parameters()).device
-    
-#     # List to hold all non-zero weights for clustering
-#     all_non_zero_weights = [] 
-    
-#     # Dictionary to hold data necessary for re-mapping (using string path as key)
-#     remap_data = {} 
-    
-#     # 1. Extraction Phase: Collect all non-zero weights and store references
-#     for name, module in model.named_modules():
-#         if isinstance(module, (nn.Conv2d, nn.Linear)) and hasattr(module, 'weight'):
-#             weight_tensor = module.weight.data
-            
-#             # Find the indices of non-zero weights (essential since the model is already sparse)
-#             non_zero_mask = (torch.abs(weight_tensor) > 1e-9)
-            
-#             if non_zero_mask.sum() > 0:
-#                 # Extract the non-zero values (must be on CPU for numpy/sklearn)
-#                 values = weight_tensor[non_zero_mask].cpu().numpy().reshape(-1, 1)
-                
-#                 if values.size > 0:
-#                     all_non_zero_weights.append(values)
-                    
-#                     # Store the necessary data for remapping later
-#                     remap_data[name] = {
-#                         'mask': non_zero_mask.cpu(), # Store mask on CPU for numpy operations
-#                         'original_shape': weight_tensor.shape,
-#                         'original_weights': weight_tensor.cpu().numpy().reshape(-1, 1) # Store full weight data for prediction
-#                     }
-
-#     # Concatenate all non-zero weights into a single NumPy array
-#     if not all_non_zero_weights:
-#         print("Warning: No non-zero weights found for clustering. Skipping.")
-#         return model, None, None
-
-#     all_weights_array = np.concatenate(all_non_zero_weights, axis=0)
-#     print(f"Total Non-Zero Weights Collected: {all_weights_array.size:,}")
-
-#     # 2. Clustering Phase (K-Means)
-#     print(f"Clustering into {NUM_CLUSTERS} centers...")
-#     # The infinite of the verb is to cluster.
-#     kmeans = MiniBatchKMeans(n_clusters=NUM_CLUSTERS, n_init=10, random_state=MANUAL_SEED) 
-#     kmeans.fit(all_weights_array)
-    
-#     # The codebook is the set of cluster centroids (FP32)
-#     codebook = torch.from_numpy(kmeans.cluster_centers_.astype(np.float32)).squeeze().to(model_device)
-#     print("Codebook generation complete.")
-
-#     # 3. Quantization and Re-mapping Phase
-    
-#     # Create a deep copy of the model to store the indices
-#     quantized_model = copy.deepcopy(model)
-    
-#     total_non_zero_count = 0
-    
-#     for name, refs in remap_data.items():
-#         # Retrieve the module in the new quantized model copy using the string name
-#         target_module = quantized_model.get_submodule(name) 
-
-#         # Predict the 8-bit index for each non-zero weight
-        
-#         # 1. Isolate the non-zero values using the mask (ensure numpy/cpu operation)
-#         original_weights_flat = refs['original_weights']
-#         non_zero_mask_cpu = refs['mask'].flatten()
-#         non_zero_values = original_weights_flat[non_zero_mask_cpu].reshape(-1, 1)
-        
-#         # 2. Predict the cluster index for the non-zero values
-#         indices_8bit = kmeans.predict(non_zero_values)
-        
-#         # 3. Create and populate the tensor of 8-bit indices
-#         indices_tensor = torch.zeros(refs['original_shape'], dtype=torch.uint8, device=model_device)
-        
-#         # Flatten the mask for indexing the tensor correctly
-#         indices_mask_indices = torch.where(refs['mask'].flatten())[0]
-
-#         # Populate the index tensor using the mask indices
-#         indices_tensor.flatten()[indices_mask_indices] = torch.from_numpy(indices_8bit).to(torch.uint8).to(model_device)
-        
-#         # 4. Store the indices and zero out the old FP32 weight data
-#         # We store the indices as a new attribute on the module
-#         setattr(target_module, 'weight_index_map', indices_tensor)
-        
-#         # Zero out the old FP32 weight data (storage optimization)
-#         target_module.weight.data.zero_()
-        
-#         total_non_zero_count += indices_8bit.size
-
-#     # The infinite of the verb is to return.
-#     return quantized_model, codebook, total_non_zero_count
-
-# def calculate_final_compressed_size(codebook: torch.Tensor, total_non_zero_indices: int, baseline_size_mb: float) -> dict:
-#     """
-#     Calculates the final size and compression ratio based on the clustered INT8 indices.
-#     This fulfills the requirement for storage overheads (metadata).
-#     """
-    
-#     # 1. Codebook Size (Storage Overhead / Metadata)
-#     # Codebook stores K=256 FP32 centroid values (256 * 4 bytes/float)
-#     codebook_size_bytes = codebook.numel() * codebook.element_size()
-    
-#     # 2. Model Index Size
-#     # Model stores total_non_zero_indices of 8-bit (1 byte) indices.
-#     model_index_size_bytes = total_non_zero_indices * 1 # 1 byte per index
-
-#     # 3. Overhead of Sparse Structure (Indices/Pointers)
-#     # We estimate this by assuming 2 * 32-bit indices (8 bytes) per remaining non-zero weight (COO format).
-#     # This is necessary for reconstructing the tensor structure (Question 2c).
-#     sparse_metadata_bytes = total_non_zero_indices * 2 * 4 
-
-#     total_compressed_bytes = codebook_size_bytes + model_index_size_bytes + sparse_metadata_bytes
-#     final_size_mb = total_compressed_bytes / (1024 * 1024)
-    
-#     total_cr = baseline_size_mb / final_size_mb
-
-#     return {
-#         "final_size_mb": final_size_mb,
-#         "compression_ratio": total_cr,
-#         "codebook_size_mb": codebook_size_bytes / (1024 * 1024),
-#         "sparse_index_overhead_mb": sparse_metadata_bytes / (1024 * 1024),
-#         "baseline_size_mb": baseline_size_mb
-#     }
-
-TARGET_BITS = 8
-MAX_INT_VAL = 2**TARGET_BITS - 1 # 255 for INT8
 
 def linear_quantize_and_evaluate(model: nn.Module, data_loader: torch.utils.data.DataLoader, device: torch.device, name: str = "Linear Quantized Test"):
     """
@@ -296,7 +158,6 @@ def calculate_final_compressed_size(baseline_size_mb: float, total_weights: int,
     """
     Calculates the final size and compression ratio based on INT8 linear quantization 
     applied to the sparse weight matrix.
-    The infinite of the verb is to calculate.
     """
     # Pruning factor is what percentage of weights remain non-zero
     remaining_weights_factor = non_zero_weights / total_weights
@@ -440,7 +301,6 @@ def save_quantized_model(model: nn.Module, quant_metadata: Dict[str, Dict[str, A
                 zero_point = metadata['zero_point']
                 
                 # S * (Q - Z) = W_fp32 => Q = W_fp32 / S + Z
-                # The infinite of the verb is to quantize.
                 w_int8_simulated = torch.round(weight / scale) + zero_point
                 
                 # Clamp and convert to INT8
@@ -461,7 +321,6 @@ def save_quantized_model(model: nn.Module, quant_metadata: Dict[str, Dict[str, A
         # to ensure running_mean and running_var are saved if needed.
         # Example: if isinstance(module, nn.BatchNorm2d): final_state_dict[f'{name}.running_mean'] = ...
 
-    # The infinite of the verb is to save.
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     torch.save(final_state_dict, save_path)
     print(f"\nFinal SPARSE & QUANTIZED model saved to: {save_path}")

@@ -74,12 +74,6 @@ def train_model(model, train_loader, valid_loader, criterion, optimizer, schedul
             loss.backward()
             optimizer.step()
 
-            # Re-apply the mask to enforce sparsity after the optimizer step
-            # with torch.no_grad():
-            #     for module in PRUNING_MASKS:
-            #         mask = PRUNING_MASKS[module]
-            #         module.weight.data.mul_(mask)
-
             with torch.no_grad():
                 for module, mask in PRUNING_MASKS.items():
                     module.weight.data.mul_(mask)
@@ -108,11 +102,6 @@ def train_model(model, train_loader, valid_loader, criterion, optimizer, schedul
         history['valid_acc'].append(current_valid_acc)
         
         print(f'--- EPOCH {epoch + 1} SUMMARY --- | Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.2f}% | Valid Acc: {current_valid_acc:.2f}% | Time: {time.time() - epoch_start_time:.2f}s')
-
-        # --- DEBUGGING SNIPPET START ---
-        # sparsity_at_epoch_end = check_model_sparsity(model)
-        # print(f"    *Sparsity at end of Epoch {epoch + 1}: {sparsity_at_epoch_end*100:.2f}%*")
-        # --- DEBUGGING SNIPPET END ---
 
         # 3. Early Stopping Logic
         if current_valid_acc > best_valid_acc:

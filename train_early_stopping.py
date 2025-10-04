@@ -150,23 +150,6 @@ def load_model_weights(model, path):
     model.load_state_dict(state_dict)
     return model
 
-# def load_model_weights(model, path):
-#     """Loads model weights from a .pth file."""
-#     try:
-#         if os.path.exists(path):
-#             print(f"Loading previous model weights from: {path}")
-#             # Get the current device the model is on
-#             map_location = next(model.parameters()).device
-#             model.load_state_dict(torch.load(path, map_location=map_location))
-#             return model
-#         else:
-#             print(f"Model weights not found at: {path}. Starting with random initialization.")
-#             return model
-#     except RuntimeError as e:
-#         print(f"Error loading model weights: {e}")
-#         print("Model architecture or state dict file may be mismatched. Starting with random initialization.")
-#         return model
-
 # --- 4. TRAINING & EVALUATION FUNCTIONS ---
 
 def evaluate_model(model, data_loader, device, name="Test"):
@@ -273,7 +256,7 @@ def save_training_data(model, history, final_test_accuracy, args, total_epochs_t
     os.makedirs(path, exist_ok=True)
     
     # Create descriptive filename based on parameters
-    # Note: Using load_path name to indicate pruning status if loaded from a pruned model
+    # NOTE: Using load_path name to indicate pruning status if loaded from a pruned model
     prune_status = 'baseline' if not args.load_path else os.path.basename(args.load_path).replace('.pth', '').replace('mobilenetv2_pruned_', 'pruned_')
     
     filename_base = f"mobilenetv2_{prune_status}_lr{args.lr:.0e}_e{total_epochs_trained}"
