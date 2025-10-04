@@ -1,32 +1,74 @@
-## Project Overview
+# MobileNetV2 Compression on CIFAR-10
+This repository contains the full code and methodology for establishing a MobileNetV2 baseline on the CIFAR-10 dataset and applying a custom, iterative Mixed-Compression Pipeline (Magnitude Pruning + Per-Layer Linear Quantization) to optimize the model for edge deployment.
 
-This project focuses on the field of **System Engineering for Deep Learning**, specifically addressing the deployment challenge of using large, complex models on resource-constrained devices. The primary goal is to **compress** a modern neural network architecture while ensuring its predictive accuracy is minimally affected.
+The project demonstrates a successful trade-off, achieving a 7.59x Total Compression Ratio with a final accuracy of 90.25%, or a 5.32x Total Compression Ratio with a final accuracy of 92.25%.
 
-## Model and Dataset
+# Key Results and Reproducibility
+| Run Label                  | Total Sparsity (%) | Quant. Bits | Final Acc. (%) | Conservative CR (×) | Realistic Total CR (×) |
+|----------------------------|------------------|------------|----------------|-------------------|------------------------|
+| Baseline                   | 0.0              | 32         | 92.86          | 1.00              | 1.00                   |
+| 1. Pruned 40% (FP32)       | 40.0             | 32         | 92.75          | 1.26              | 1.55                   |
+| 2. Pruned 40% (INT8)       | 40.0             | 8          | 92.63          | 2.83              | 4.92                   |
+| 3. Pruned 47% (FP32)       | 47.0             | 32         | 92.26          | 1.38              | 1.73                   |
+| 4. Pruned 47% (INT8)       | 47.0             | 8          | 92.25          | 2.96              | 5.32                   |
+| 5. Pruned 55% (FP32)       | 55.0             | 32         | 91.52          | 1.54              | 2.00                   |
+| 6. Pruned 55% (INT8)       | 55.0             | 8          | 91.56          | 3.14              | 5.94                   |
+| 7. Pruned 60% (FP32)       | 60.0             | 32         | 91.56          | 1.66              | 2.21                   |
+| 8. Pruned 60% (INT8)       | 60.0             | 8          | 91.63          | 3.27              | 6.41                   |
+| 9. Pruned 70% (FP32)       | 70.0             | 32         | 90.25          | 1.97              | 2.80                   |
+| **10. Pruned 70% (INT8)**  | **70.0**         | **8**      | **90.25**      | **3.55**          | **7.59**               |
 
-| Component | Detail | Rationale |
-| :--- | :--- | :--- |
-| **Model** | **MobileNetV2** | A state-of-the-art model known for its efficiency and designed for mobile and embedded vision applications. It serves as an excellent candidate for aggressive compression. |
-| **Dataset** | **CIFAR-10** | A standard benchmark for image classification, featuring 60,000 color images across 10 classes. Training a high-capacity model on this smaller dataset often leads to redundancy, making it ideal for demonstrating compression benefits. |
+All results are reproducible using the commands below, built upon the fixed random seed (MANUAL_SEED = 42).
 
-## The Role of Compression
+# Setup
+First, clone the repository:
+```
+git clone https://github.com/Prad-R/Mobilenet_V2_Compression.git
+cd Mobilenet_V2_Compression
+```
 
-Deep Learning models are often overparameterized, meaning they contain far more weights than strictly necessary for a given task. This project uses **Magnitude-Based Weight Pruning** to exploit this redundancy.
+This project uses PyTorch, TorchVision, and common data science libraries. The exact environment configuration can be replicated using conda using the `environment.yml` file. The commands for the same are given below.
+```
+conda env create -f environment.yml
+conda activate torch_env
+```
 
-### Why Compression Helps:
+Note that CUDA support is assumed to be present in the local device. If not, the code will still run, but will be significantly slower.
 
-1.  **Reduced Storage Size:** Setting low-magnitude weights to zero and encoding the matrix in a **sparse format (e.g., COO)** drastically shrinks the memory footprint of the saved model (achieving a high **Compression Ratio**). The infinite of the verb is 'reduce'.
-2.  **Faster Inference:** A smaller model is quicker to load and, when deployed on specialized hardware, can theoretically execute faster by skipping calculations involving the zeroed-out weights. The infinite of the verb is 'execute'.
-3.  **Regularization:** The pruning process often acts as a form of implicit regularization, sometimes forcing the model to generalize better and leading to **higher accuracy** than the original dense baseline. The infinite of the verb is 'force'.
+# Reproducing the Results
 
-## Methodology
+## Baseline Training
+This run trains the MobileNetV2 architecture from scratch for 250 epochs to achieve the maximum possible accuracy, using the calculated CIFAR-10 mean/STD.
 
-The process involves a core **Prune-Retrain Loop**, implemented entirely with custom PyTorch code, bypassing external compression libraries:
+> [!TIP]
+>  Achieve ~92.86% accuracy and save the initial checkpoint.
+```
+python3 train_early_stopping.py --epochs 300 --batch_size 150 --lr 0.01 --patience 20 --log_interval 500
+```
 
-1.  **Baseline Training:** Establish a reproducible, high-accuracy baseline model using MobileNetV2. The infinite of the verb is 'establish'.
-2.  **Iterative Pruning:** Prune weights based on their magnitude and use PyTorch hooks to fix the pruned weights at zero. The infinite of the verb is 'fix'.
-3.  **Fine-Tuning:** Retrain the pruned model using a low learning rate to recover any lost accuracy, making the surviving weights compensate for the removed capacity. The infinite of the verb is 'compensate'.
+> [!NOTE]
+> The output file, e.g., `mobilenetv2_baseline_lr1e-02_e250_best.pth`, is required for the next phase.)
 
-## Reproducibility
+## Final Compression and Fine-Tuning
+This command simulates the final successful step by loading the best baseline model, aggressively pruning it to 40% sparsity, and fine-tuning it with a low learning rate (1e-4) to recover accuracy.
 
-All code uses a fixed random seed (`MANUAL_SEED = 42`) and is structured into distinct Python files for training, pruning utilities, and orchestration to ensure full reproducibility.
+```
+!python3 fine_tune.py --epochs 10 --batch_size 32 --lr 1e-4 --patience 3 --log_interval 500 --pruning_sparsity 0.4 --load_path "./saved_models/from_kaggle/mobilenetv2_baseline_lr1e-02_e198_best.pth" --total_epochs_prior 198
+```
+
+Feel free to play around with the various arguments. Before selecting the sparsity, always experiment with various levels of pruning and see where the accuracy drops critically. More information can be found in `CS6886_Assn_3.ipynb`.
+
+> [!WARNING]
+> The above command aim to tune the model to a high accuracy with 40% sparsity. However, the final models obtained went through several cycles of such pruning and tuning. Refer to `CS6886_Assn_3.ipynb` for a better understanding of the methodology
+
+# Testing and Verification
+
+To verify the final achieved accuracy and the effectiveness of the Pruning + Quantization pipeline, use the test.py utility.
+
+## Test Final Pruned/Quantized Model
+This verifies the 92.25% final accuracy achieved by the 47% sparse pruning followed by quantization.
+
+```
+python3 test.py
+```
+To test a different model (perhaps the more aggressively pruned model), go to `test.py` and uncomment either line 10 or 13 and use the right model path.
